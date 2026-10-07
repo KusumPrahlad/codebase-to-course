@@ -15,6 +15,8 @@
  *  - Architecture diagram
  *  - "Spot the bug" challenge
  *  - Layer toggle
+ *
+ * Each widget initialises inside safe(): one broken widget never stops the rest.
  */
 (function () {
   'use strict';
@@ -22,6 +24,21 @@
   /* ── HELPERS ──────────────────────────────────────────────── */
   function $(sel, ctx) { return (ctx || document).querySelector(sel); }
   function $$(sel, ctx) { return Array.from((ctx || document).querySelectorAll(sel)); }
+
+  // Run one engine/widget initialiser in isolation: if it throws (bad markup,
+  // bad JSON, missing element) the error is logged and every OTHER widget on
+  // the page keeps working. Without this, one bad widget kills all later code.
+  function safe(name, fn) {
+    try { return fn(); }
+    catch (err) { console.warn('[course] ' + name + ' failed to initialise:', err); }
+  }
+
+  const motionQuery  = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  const scrollBehavior = () => (motionQuery && motionQuery.matches ? 'auto' : 'smooth');
+
+  // Reveal-on-scroll hides content until JS shows it. Mark JS as running so the
+  // CSS only hides content when it is certain to be revealed again.
+  document.documentElement.classList.add('js');
 
   /* ── NAVIGATION & PROGRESS BAR ────────────────────────────── */
   const progressBar = $('#progress-bar');
@@ -64,7 +81,7 @@
   navDots.forEach(dot => {
     dot.addEventListener('click', () => {
       const target = $('#' + dot.dataset.target);
-      if (target) target.scrollIntoView({ behavior: 'smooth' });
+      if (target) target.scrollIntoView({ behavior: scrollBehavior() });
     });
   });
 
@@ -79,29 +96,46 @@
     return 0;
   }
 
+  // Module-to-module keys: →/← and j/k.
+  // ↑/↓ are deliberately NOT captured: they must keep scrolling normally inside
+  // a long module. Anything with Alt/Ctrl/Meta/Shift is left to the browser
+  // (e.g. Alt+← is "Back").
   document.addEventListener('keydown', e => {
-    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
-    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
-      const next = modules[currentModuleIndex() + 1];
-      if (next) { next.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); }
-    }
-    if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-      const prev = modules[currentModuleIndex() - 1];
-      if (prev) { prev.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); }
-    }
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return;
+    const forward  = e.key === 'ArrowRight' || e.key === 'j';
+    const backward = e.key === 'ArrowLeft'  || e.key === 'k';
+    if (!forward && !backward) return;
+    const target = modules[currentModuleIndex() + (forward ? 1 : -1)];
+    if (target) { target.scrollIntoView({ behavior: scrollBehavior() }); e.preventDefault(); }
   });
 
   /* ── SCROLL-TRIGGERED REVEAL ───────────────────────────────── */
-  const revealObserver = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add('visible');
-        revealObserver.unobserve(entry.target);
-      }
-    });
-  }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+  // Fail-safe: if IntersectionObserver is missing or throws, show everything
+  // immediately rather than leaving content invisible.
+  function revealAll() { $$('.animate-in').forEach(el => el.classList.add('visible')); }
 
-  $$('.animate-in').forEach(el => revealObserver.observe(el));
+  try {
+    if (typeof window.IntersectionObserver !== 'function' || (motionQuery && motionQuery.matches)) {
+      revealAll();
+    } else {
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          revealObserver.unobserve(entry.target);
+        }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    $$('.animate-in').forEach(el => revealObserver.observe(el));
+    }
+  } catch (err) {
+    console.warn('[course] scroll-reveal failed, showing all content:', err);
+    revealAll();
+  }
+  // Browsers that print or "save as PDF" never scroll, so reveal first.
+  window.addEventListener('beforeprint', revealAll);
 
   // Stagger children
   $$('.stagger-children').forEach(parent => {
@@ -311,7 +345,7 @@
   };
 
   // Auto-init all dnd containers
-  $$('.dnd-container').forEach(el => initDnD(el));
+  $$('.dnd-container').forEach(el => safe('drag-and-drop', () => initDnD(el)));
 
   /* ── GROUP CHAT ENGINE ─────────────────────────────────────── */
   function initChat(containerEl) {
@@ -336,8 +370,16 @@
       if (progressEl) progressEl.textContent = index + ' / ' + messages.length + ' messages';
     }
 
+    // Only one message may be "in flight" (typing indicator showing) at a time.
+    // Extra clicks while one is pending are ignored, so no message is skipped
+    // and the counter always matches what is on screen. All timers are tracked
+    // so Reset can cancel them.
+    const TYPING_MS = motionQuery && motionQuery.matches ? 0 : 800;
+    let pending = null;      // timeout id of the message currently being typed
+    let playing = null;      // interval id while "Show all" is running
+
     function showNext() {
-      if (index >= messages.length) return;
+      if (pending !== null || index >= messages.length) return;
       const msg    = messages[index];
       const sender = msg.dataset.sender;
 
@@ -349,23 +391,33 @@
         typingEl.style.display = 'flex';
       }
 
-      setTimeout(() => {
+      pending = setTimeout(() => {
+        pending = null;
         if (typingEl) typingEl.style.display = 'none';
         msg.style.display = 'flex';
-        msg.style.animation = 'fadeSlideUp 0.3s var(--ease-out)';
+        msg.style.animation = TYPING_MS ? 'fadeSlideUp 0.3s var(--ease-out)' : 'none';
         index++;
         updateProgress();
-      }, 800);
+        if (index >= messages.length) stopPlaying();
+      }, TYPING_MS);
+    }
+
+    function stopPlaying() {
+      if (playing !== null) { clearInterval(playing); playing = null; }
     }
 
     function showAll() {
-      const iv = setInterval(() => {
-        if (index >= messages.length) { clearInterval(iv); return; }
-        showNext();
-      }, 1200);
+      if (playing !== null) return;           // already playing
+      showNext();
+      playing = setInterval(() => {
+        if (index >= messages.length) { stopPlaying(); return; }
+        showNext();                             // ignored while one is pending
+      }, TYPING_MS + 400);
     }
 
     function reset() {
+      stopPlaying();
+      if (pending !== null) { clearTimeout(pending); pending = null; }
       index = 0;
       messages.forEach(m => { m.style.display = 'none'; m.style.animation = ''; });
       if (typingEl) typingEl.style.display = 'none';
@@ -383,12 +435,24 @@
     updateProgress();
   }
 
-  $$('.chat-window').forEach(el => initChat(el));
+  $$('.chat-window').forEach(el => safe('group chat', () => initChat(el)));
 
   /* ── FLOW ANIMATION ENGINE ─────────────────────────────────── */
   function initFlow(containerEl) {
     if (!containerEl) return;
-    const stepsData  = JSON.parse(containerEl.dataset.steps || '[]');
+    let stepsData = [];
+    try {
+      stepsData = JSON.parse(containerEl.dataset.steps || '[]');
+      if (!Array.isArray(stepsData)) throw new Error('data-steps must be a JSON array');
+    } catch (err) {
+      // Bad JSON (most often an apostrophe inside single-quoted data-steps).
+      // Show a visible message on this widget only; the rest of the page is unaffected.
+      console.warn('[course] flow animation has invalid data-steps:', err.message);
+      const lbl = $('.flow-step-label', containerEl);
+      if (lbl) lbl.textContent = 'This animation could not load (invalid data-steps).';
+      containerEl.classList.add('widget-error');
+      return;
+    }
     const labelEl    = $('.flow-step-label', containerEl);
     const progressEl = $('.flow-progress',   containerEl);
     const packet     = $('.flow-packet',     containerEl);
@@ -451,7 +515,7 @@
     updateProgress();
   }
 
-  $$('.flow-animation').forEach(el => initFlow(el));
+  $$('.flow-animation').forEach(el => safe('flow animation', () => initFlow(el)));
 
   /* ── ARCHITECTURE DIAGRAM ──────────────────────────────────── */
   $$('.arch-component').forEach(comp => {
@@ -494,5 +558,8 @@
     if (layer) layer.style.display = 'block';
     btn.classList.add('active');
   };
+
+  // Tell the page's fail-safe (see _base.html) that the engine loaded.
+  window.__c2cReady = true;
 
 })();

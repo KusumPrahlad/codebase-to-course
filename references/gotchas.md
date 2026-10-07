@@ -5,7 +5,7 @@
 These are real problems encountered when building courses. Check every one before considering a course complete.
 
 ### Tooltip Clipping
-Translation blocks use `overflow: hidden` for code wrapping. If tooltips use `position: absolute` inside the term element, they get clipped by the container. **Fix:** Tooltips must use `position: fixed` and be appended to `document.body`. Calculate position from `getBoundingClientRect()`. This is already handled by `main.js` but is the #1 bug that appears in every build.
+Translation blocks use `overflow: hidden` for code wrapping, which would clip a tooltip placed inside the term element. `main.js` already avoids this (tooltips are `position: fixed` and appended to `document.body`), so use the `.term` markup exactly as shown in `interactive-elements.md` and never write your own tooltip CSS or JS.
 
 ### Not Enough Tooltips
 The most common failure is under-tooltipping. Non-technical learners don't know terms like REPL, JSON, flag, entry point, PATH, pip, namespace, function, class, module, PR, E2E, or even software names like Blender/GIMP. **Rule of thumb:** if a term wouldn't appear in everyday conversation with a non-technical friend, tooltip it. Err heavily on the side of too many. BUT: don't tooltip terms the user already knows well from their domain (e.g., AI/ML concepts for someone in AI).
@@ -30,3 +30,18 @@ Trying to write all modules in one pass causes later modules to be thin and rush
 
 ### Missing Interactive Elements
 A module with only text and code blocks, no interactivity. Every module needs at least one of: quiz, data flow animation, group chat, architecture diagram, drag-and-drop. These aren't decorations — they're how non-technical learners actually process information.
+
+### Apostrophes in `data-steps`
+`data-steps='[...]'` is single-quoted, so an apostrophe in a label (`the user's request`) ends the attribute early and the JSON is invalid. The flow animation then shows an error message and `node build.mjs` fails with "invalid data-steps JSON". Avoid apostrophes in labels or write them as `&apos;`.
+
+### Unescaped Code
+Raw `<` and `&` inside `<pre><code>` are parsed as HTML: `List<String>` loses `<String>`, and `a && b` can break. Always write `&lt;`, `&gt;` and `&amp;`. The build fails on unescaped tags in code blocks.
+
+### Secrets in Snippets
+Config files, `.env` examples and test fixtures often contain real keys. The course is meant to be shared, so never use a snippet containing a credential; pick another one. The build scans for common key formats and fails if it finds one.
+
+### Skipping the Build Report
+`node build.mjs` prints warnings (missing quiz or translation block, too few tooltips, walls of text, no chat or flow animation). A build that "succeeds" with warnings is not finished; fix them before presenting the course.
+
+### Editing the Fixed Files
+Never edit or re-type `styles.css`, `main.js` or `build.mjs` in the course folder. Copy them with `cp`. If a widget misbehaves, fix the module markup, not the engine.

@@ -304,14 +304,16 @@ p { margin-bottom: var(--space-4); }
 p:last-child { margin-bottom: 0; }
 
 /* ── SCROLL ANIMATIONS ──────────────────────────────────────── */
-.animate-in {
+/* Content is only hidden while JS is confirmed running (html.js is set in
+   _base.html and removed again if main.js fails to load). No JS = fully visible. */
+.js .animate-in {
   opacity: 0;
   transform: translateY(20px);
   transition:
     opacity var(--duration-slow) var(--ease-out),
     transform var(--duration-slow) var(--ease-out);
 }
-.animate-in.visible {
+.js .animate-in.visible {
   opacity: 1;
   transform: translateY(0);
 }
@@ -1192,4 +1194,30 @@ p:last-child { margin-bottom: 0; }
   20%  { opacity: 1; }
   80%  { opacity: 1; }
   to   { left: var(--packet-to-x);   top: var(--packet-to-y);   opacity: 0; }
+}
+
+/* ── WIDGET ERROR STATE ─────────────────────────────────────── */
+.widget-error .flow-step-label { color: #B3261E; font-weight: 600; }
+.widget-error .flow-controls button { opacity: 0.4; pointer-events: none; }
+
+/* ── REDUCED MOTION ─────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+  }
+  .js .animate-in { opacity: 1; transform: none; }
+}
+
+/* ── PRINT / SAVE AS PDF ────────────────────────────────────── */
+@media print {
+  .nav, .progress-bar { display: none !important; }
+  .js .animate-in { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .module { min-height: 0 !important; break-before: page; scroll-snap-align: none; }
+  .translation-block, .quiz-question-block, .callout { break-inside: avoid; }
+  html, body { scroll-snap-type: none !important; }
+  .term-tooltip { display: none !important; }
 }
